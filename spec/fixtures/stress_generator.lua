@@ -3,6 +3,7 @@ stress_generator.__index = stress_generator
 
 
 local cjson = require "cjson"
+local ngx_pipe = require "ngx.pipe"
 local pl_file = require "pl.file"
 local pl_path = require "pl.path"
 local uuid = require "resty.jit-uuid"
@@ -22,11 +23,12 @@ local attack_cmds = {
 
 
 function stress_generator.is_running(self)
-  if self.finish_time == nil or self.finish_time <= os.time() then
-    return false
+  if self.pipe and self.pipe:pid() then
+    local _, reason = self.pipe:wait()
+    return reason == "exit" or reason == "exited"
   end
 
-  return true
+  return false
 end
 
 
@@ -44,9 +46,8 @@ function stress_generator.get_results(self)
   end
 
   local report_cmd = fmt("vegeta report -type=json %s 2>&1", self.results_filename)
-  local report_pipe = io.popen(report_cmd)
-  local output = report_pipe:read('*all')
-  report_pipe:close()
+  local report_pipe = ngx_pipe.spawn(report_cmd)
+  local output = report_pipe:stdout_read_all()
 
   if pl_path.exists(self.results_filename) then
     pl_file.delete(self.results_filename)
@@ -82,9 +83,8 @@ function stress_generator.get_results(self)
   if self.debug then
     -- show pretty results
     local report_cmd = fmt("vegeta report %s 2>&1", self.results_filename)
-    local report_pipe = io.popen(report_cmd)
-    local output = report_pipe:read('*all')
-    report_pipe:close()
+    local report_pipe = ngx_pipe.spawn(report_cmd)
+    local output = report_pipe:stdout_read_all()
     print(output)
   end
 
@@ -112,9 +112,8 @@ function stress_generator.run(self, uri, headers, duration, rate)
     "echo %s | vegeta attack %s -rate=%d -duration=%ds -workers=%d -timeout=5s -output=%s",
     attack_cmd, req_headers, rate, duration, self.workers, self.results_filename)
 
-  self.pipe = io.popen(vegeta_cmd)
-  -- we will rely on vegeta's duration
-  self.finish_time = os.time() + duration
+  self.pipe = ngx_pipe.spawn(vegeta_cmd)
+  self.pipe:set_timeouts(nil, nil, nil, 10)
 end
 
 
